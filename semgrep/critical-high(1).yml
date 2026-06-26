@@ -1,0 +1,210 @@
+rules:
+  - id: intrapanel.python.sql-injection.string-formatting
+    languages: [python]
+    severity: ERROR
+    message: >-
+      SQL statement is assembled with string formatting before execute(). This is SQL injection-prone; use parameterized queries such as cur.execute("... WHERE x = ?", (value,)).
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 Injection"
+      technology: [python, sqlite]
+      references:
+        - https://semgrep.dev/docs/writing-rules/overview/
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $QUERY = $SQL % $VAL
+              ...
+              $CUR.execute($QUERY)
+          - pattern: |
+              $QUERY = $SQL.format(...)
+              ...
+              $CUR.execute($QUERY)
+          - pattern: |
+              $CUR.execute($SQL % $VAL)
+          - pattern: |
+              $CUR.execute($SQL.format(...))
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: (?is).*\b(select|insert|update|delete|drop|alter|create|replace)\b.*
+      - pattern-not: $CUR.execute($SQL, (...))
+
+  - id: intrapanel.python.sql-injection.f-string
+    languages: [python]
+    severity: ERROR
+    message: >-
+      SQL statement is assembled with an f-string and then executed. This is SQL injection-prone; use parameterized queries.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 Injection"
+      technology: [python, sqlite]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $QUERY = f"...{$VAL}..."
+              ...
+              $CUR.execute($QUERY)
+          - pattern: |
+              $QUERY = f'...{$VAL}...'
+              ...
+              $CUR.execute($QUERY)
+          - pattern: |
+              $CUR.execute(f"...{$VAL}...")
+          - pattern: |
+              $CUR.execute(f'...{$VAL}...')
+      - pattern-not: $CUR.execute($SQL, (...))
+
+  - id: intrapanel.python.command-injection.subprocess-shell-true-tainted
+    languages: [python]
+    severity: ERROR
+    mode: taint
+    message: >-
+      Request-controlled data reaches subprocess with shell=True. This permits command injection. Pass arguments as a list and keep shell=False.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 Injection"
+      technology: [python, flask]
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.form.get(...)
+      - pattern: request.values.get(...)
+      - pattern: request.json.get(...)
+      - pattern: request.get_json(...)
+      - pattern: request.args[$KEY]
+      - pattern: request.form[$KEY]
+      - pattern: request.values[$KEY]
+    pattern-sinks:
+      - pattern: subprocess.$FUNC($CMD, shell=True, ...)
+      - pattern: subprocess.$FUNC(..., shell=True)
+
+  - id: intrapanel.python.command-injection.shell-true-concat
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess is called with shell=True and a concatenated command. If any part is user-controlled, this is command injection-prone.
+    metadata:
+      category: security
+      confidence: MEDIUM
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 Injection"
+      technology: [python]
+    pattern-either:
+      - pattern: subprocess.$FUNC("..." + $X, shell=True, ...)
+      - pattern: subprocess.$FUNC('...' + $X, shell=True, ...)
+      - pattern: subprocess.$FUNC([$SHELL, $ARG, "..." + $X], shell=True, ...)
+      - pattern: subprocess.$FUNC([$SHELL, $ARG, '...' + $X], shell=True, ...)
+
+  - id: intrapanel.python.path-traversal.request-param-join
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A request parameter is joined into a filesystem path. Validate with pathlib/commonpath and sanitize filenames with secure_filename before opening/saving/downloading.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+      owasp: "A01:2021 Broken Access Control"
+      technology: [python, flask]
+    patterns:
+      - pattern-inside: |
+          $NAME = request.$REQ.get(...)
+          ...
+      - pattern: os.path.join($BASE, $NAME)
+      - pattern-not: os.path.join($BASE, secure_filename($NAME))
+
+  - id: intrapanel.python.path-traversal.upload-filename-join
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A client-supplied upload filename is used in os.path.join(). This can overwrite files via path traversal; use secure_filename and enforce a safe base directory.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-22: Path Traversal"
+      owasp: "A01:2021 Broken Access Control"
+      technology: [python, flask]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              $FILE = request.files.get(...)
+              ...
+          - pattern: os.path.join($BASE, $FILE.filename)
+      - pattern: os.path.join($BASE, request.files.get(...).filename)
+
+  - id: intrapanel.python.hardcoded-secret.assignment
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Hardcoded secret or credential found. Move secrets to environment variables or a secret manager and rotate leaked values.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      owasp: "A07:2021 Identification and Authentication Failures"
+      technology: [python, flask]
+    pattern-either:
+      - pattern: app.secret_key = "$SECRET"
+      - patterns:
+          - pattern: $NAME = "$SECRET"
+          - metavariable-regex:
+              metavariable: $NAME
+              regex: (?i).*(secret|password|passwd|pwd|token|api[_-]?key|access[_-]?key|private[_-]?key).*
+          - metavariable-regex:
+              metavariable: $SECRET
+              regex: .{4,}
+      - patterns:
+          - pattern: $NAME = '$SECRET'
+          - metavariable-regex:
+              metavariable: $NAME
+              regex: (?i).*(secret|password|passwd|pwd|token|api[_-]?key|access[_-]?key|private[_-]?key).*
+          - metavariable-regex:
+              metavariable: $SECRET
+              regex: .{4,}
+    pattern-not: $NAME = os.environ.get(...)
+
+  - id: intrapanel.python.yaml-load-unsafe
+    languages: [python]
+    severity: ERROR
+    message: >-
+      yaml.load() is used without SafeLoader. Use yaml.safe_load() or yaml.load(..., Loader=yaml.SafeLoader) to avoid unsafe deserialization.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 Software and Data Integrity Failures"
+      technology: [python, pyyaml]
+    patterns:
+      - pattern: yaml.load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader)
+      - pattern-not: yaml.load(..., Loader=SafeLoader)
+      - pattern-not: yaml.load(..., Loader=CSafeLoader)
+
+  - id: intrapanel.python.xss.render-template-string-tainted
+    languages: [python]
+    severity: ERROR
+    mode: taint
+    message: >-
+      Request-controlled data is rendered through render_template_string(). This can create server-side template injection or XSS; use static templates and normal autoescaping.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-79: Cross-site Scripting"
+      owasp: "A03:2021 Injection"
+      technology: [python, flask, jinja2]
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.form.get(...)
+      - pattern: request.values.get(...)
+      - pattern: request.get_json(...)
+      - pattern: request.args[$KEY]
+      - pattern: request.form[$KEY]
+    pattern-sinks:
+      - pattern: render_template_string($X, ...)
+      - pattern: flask.render_template_string($X, ...)

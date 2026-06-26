@@ -1,0 +1,5 @@
+{
+  "vuln_type": "denial_of_service",
+  "location": "0x401264",
+  "cause": "The program accepts significantly longer input than the 16-byte destination checked by __strcpy_chk, so oversized but accepted input reaches the sink and aborts the process."
+}
